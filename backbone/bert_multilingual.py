@@ -27,11 +27,10 @@ class BERTMultilingualBackbone(MammothBackbone):
     Uses bert-base-multilingual-cased model.
     """
 
-    def __init__(self, n_classes: int, device='cpu'):
+    def __init__(self, n_classes: int):
         """
         Args:
             n_classes: Number of output classes
-            device: Device to use for computation
         """
         super(BERTMultilingualBackbone, self).__init__()
 
@@ -42,7 +41,6 @@ class BERTMultilingualBackbone(MammothBackbone):
             )
 
         self.n_classes = n_classes
-        self.device = device
 
         # Load pretrained BERT model
         self.bert = AutoModel.from_pretrained('bert-base-multilingual-cased')
@@ -80,10 +78,11 @@ class BERTMultilingualBackbone(MammothBackbone):
             input_ids = x
             attention_mask = None
 
-        # Ensure tensors are on correct device
-        input_ids = input_ids.to(self.device)
+        # Ensure tensors are on the same device as model
+        device = next(self.parameters()).device
+        input_ids = input_ids.to(device)
         if attention_mask is not None:
-            attention_mask = attention_mask.to(self.device)
+            attention_mask = attention_mask.to(device)
         else:
             # Create attention mask (1 for real tokens, 0 for padding)
             attention_mask = (input_ids != 0).long()
