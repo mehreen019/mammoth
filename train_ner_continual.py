@@ -26,24 +26,41 @@ sys.path.insert(0, mammoth_path)
 from main import main
 
 if __name__ == '__main__':
+    # Disable wandb by default (can be overridden by setting WANDB_MODE env var)
+    if 'WANDB_MODE' not in os.environ:
+        os.environ['WANDB_MODE'] = 'disabled'
+
     # Check if user provided any arguments
     user_args = sys.argv[1:]
+
+    # Extract model from user args to determine if we need buffer
+    model = 'er_nlp'  # default
+    for i, arg in enumerate(user_args):
+        if arg == '--model' and i + 1 < len(user_args):
+            model = user_args[i + 1]
+            break
+
+    # Models that don't need buffer
+    NO_BUFFER_MODELS = ['sgd', 'joint', 'ewc_on', 'si', 'lwf', 'lwf-mc']
 
     # Set default arguments for NER
     default_args = {
         '--backbone': 'bert-multilingual',
         '--dataset': 'seq-hindi-bangla-ner',
-        '--model': 'er_nlp',
-        '--buffer_size': '200',
-        '--minibatch_size': '16',
+        '--n_classes': '4',  # Hindi-Bangla NER has 4 classes: O, PER, LOC, ORG
+        '--model': model,
         '--batch_size': '16',
         '--n_epochs': '2',
         '--lr': '2e-5',
         '--enable_other_metrics': '1',
         '--seed': '42',
         '--num_workers': '0',
-        '--nowand': '1',
     }
+
+    # Add buffer args only for rehearsal-based methods
+    if model not in NO_BUFFER_MODELS:
+        default_args['--buffer_size'] = '200'
+        default_args['--minibatch_size'] = '16'
 
     # Build final argument list
     final_args = []

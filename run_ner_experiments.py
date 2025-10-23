@@ -21,25 +21,24 @@ def run_experiment(model, buffer_size=None, n_epochs=2, batch_size=16, lr=2e-5):
     print("\n" + "="*80)
     print(f"RUNNING EXPERIMENT: {model.upper()}")
     print("="*80)
-    
+
     cmd = [
         sys.executable, 'train_ner_continual.py',
         '--model', model,
-        '--n_classes', '4',  # Hindi-Bangla NER has 4 classes: O, PER, LOC, ORG
         '--batch_size', str(batch_size),
         '--n_epochs', str(n_epochs),
         '--lr', str(lr),
         '--seed', '42',
-        '--nowand', '1',
     ]
-    
+
     # Add enable_other_metrics for non-joint models
     if model != 'joint':
         cmd.extend(['--enable_other_metrics', '1'])
-    
+
     # Add buffer size for replay-based methods
     if buffer_size is not None:
         cmd.extend(['--buffer_size', str(buffer_size)])
+        cmd.extend(['--minibatch_size', str(batch_size)])  # Use same as batch_size
     
     print(f"Command: {' '.join(cmd)}")
     print()
