@@ -38,12 +38,13 @@ class NERDatasetWrapper(Dataset):
     Each sample is a tokenized sentence with aggregated entity label.
     """
 
-    def __init__(self, texts, labels, tokenizer, max_length=128):
+    def __init__(self, texts, labels, tokenizer, task_ids=None, max_length=128):
         """
         Args:
             texts: List of token sequences (List[List[str]])
             labels: List of NER label sequences (List[List[int]])
             tokenizer: HuggingFace tokenizer
+            task_ids: List of task IDs for each sample (for continual learning)
             max_length: Maximum sequence length
         """
         self.texts = texts
@@ -93,6 +94,12 @@ class NERDatasetWrapper(Dataset):
         self.targets = np.array(self.sentence_labels)
         self.attention_masks = np.array([enc['attention_mask'].numpy() for enc in self.encodings])
 
+        # Store task IDs for continual learning
+        if task_ids is not None:
+            self.task_ids = np.array(task_ids)
+        else:
+            self.task_ids = np.zeros(len(self.texts), dtype=np.int64)
+
     def __len__(self):
         return len(self.texts)
 
@@ -113,17 +120,18 @@ class SequentialHindiBanglaNER(ContinualDataset):
     """
     Sequential Hindi -> Bangla NER Dataset
 
-    Task 1: Hindi NER (classes 0-3: O, PER, LOC, ORG)
-    Task 2: Bangla NER (classes 4-7: O, PER, LOC, ORG)
+    Task 0: Hindi NER (classes 0-3: O, PER, LOC, ORG)
+    Task 1: Bangla NER (classes 0-3: O, PER, LOC, ORG) - SAME classes, different language
 
-    This creates a 2-task continual learning scenario.
+    This creates a 2-task continual learning scenario where the model must learn
+    to recognize the same entity types in different languages sequentially.
     """
 
     NAME = 'seq-hindi-bangla-ner'
-    SETTING = 'class-il'
-    N_CLASSES_PER_TASK = 4  # O, PER, LOC, ORG per language
+    SETTING = 'task-il'  # Task-IL: same classes, different tasks (languages)
+    N_CLASSES_PER_TASK = 4  # O, PER, LOC, ORG (same for both languages)
     N_TASKS = 2  # Hindi, Bangla
-    N_CLASSES = N_CLASSES_PER_TASK * N_TASKS
+    N_CLASSES = 4  # Total unique classes (shared across tasks)
     SIZE = (128,)  # Sequence length (not used but required by framework)
 
     TRANSFORM = None
@@ -147,23 +155,23 @@ class SequentialHindiBanglaNER(ContinualDataset):
 
         print("Loading WikiANN dataset for Hindi and Bangla...")
 
-        # Load Hindi data (Task 1)
+        # Load Hindi data (Task 0)
         try:
-            hindi_train = load_dataset('wikiann', 'hi', split='train[:1000]')  # Small subset for speed
-            hindi_test = load_dataset('wikiann', 'hi', split='validation[:200]')
+            hindi_train = load_dataset('wikiann', 'hi', split='train[:500]')  # Smaller for speed
+            hindi_test = load_dataset('wikiann', 'hi', split='validation[:100]')
         except Exception as e:
             print(f"Error loading Hindi WikiANN: {e}")
             print("Using dummy data for demonstration...")
-            hindi_train, hindi_test = self._create_dummy_data('hindi', 1000, 200)
+            hindi_train, hindi_test = self._create_dummy_data('hindi', 500, 100)
 
-        # Load Bangla data (Task 2)
+        # Load Bangla data (Task 1)
         try:
-            bangla_train = load_dataset('wikiann', 'bn', split='train[:1000]')
-            bangla_test = load_dataset('wikiann', 'bn', split='validation[:200]')
+            bangla_train = load_dataset('wikiann', 'bn', split='train[:500]')
+            bangla_test = load_dataset('wikiann', 'bn', split='validation[:100]')
         except Exception as e:
             print(f"Error loading Bangla WikiANN: {e}")
             print("Using dummy data for demonstration...")
-            bangla_train, bangla_test = self._create_dummy_data('bangla', 1000, 200)
+            bangla_train, bangla_test = self._create_dummy_data('bangla', 500, 100)
 
         # Extract tokens and labels
         if isinstance(hindi_train, tuple):
@@ -184,27 +192,35 @@ class SequentialHindiBanglaNER(ContinualDataset):
             bangla_test_texts = bangla_test['tokens']
             bangla_test_labels = bangla_test['ner_tags']
 
-        # Combine datasets (Hindi first, then Bangla for sequential learning)
+        # Combine datasets with task IDs (Hindi=0, Bangla=1)
         all_train_texts = list(hindi_train_texts) + list(bangla_train_texts)
         all_train_labels = list(hindi_train_labels) + list(bangla_train_labels)
         all_test_texts = list(hindi_test_texts) + list(bangla_test_texts)
         all_test_labels = list(hindi_test_labels) + list(bangla_test_labels)
 
-        # Create dataset wrappers
+        # Create task IDs: 0 for Hindi, 1 for Bangla
+        train_task_ids = [0] * len(hindi_train_texts) + [1] * len(bangla_train_texts)
+        test_task_ids = [0] * len(hindi_test_texts) + [1] * len(bangla_test_texts)
+
+        # Create dataset wrappers with task IDs
         train_dataset = NERDatasetWrapper(
             all_train_texts,
             all_train_labels,
             self.tokenizer,
-            self.max_length
+            task_ids=train_task_ids,
+            max_length=self.max_length
         )
         test_dataset = NERDatasetWrapper(
             all_test_texts,
             all_test_labels,
             self.tokenizer,
-            self.max_length
+            task_ids=test_task_ids,
+            max_length=self.max_length
         )
 
         print(f"Dataset loaded: {len(train_dataset)} train, {len(test_dataset)} test samples")
+        print(f"  Task 0 (Hindi): {sum(t == 0 for t in train_task_ids)} train, {sum(t == 0 for t in test_task_ids)} test")
+        print(f"  Task 1 (Bangla): {sum(t == 1 for t in train_task_ids)} train, {sum(t == 1 for t in test_task_ids)} test")
 
         # Use Mammoth's store_masked_loaders to create task-specific loaders
         train_loader, test_loader = store_masked_loaders(train_dataset, test_dataset, self)
@@ -260,15 +276,12 @@ class SequentialHindiBanglaNER(ContinualDataset):
 
     @set_default_from_args('n_epochs')
     def get_epochs(self):
-        return 3  # Fast training for demo
+        return 2  # Fast training for demo (2 epochs per task)
 
     def get_class_names(self):
         if self.class_names is not None:
             return self.class_names
 
-        # Class names for Hindi and Bangla tasks
-        self.class_names = [
-            'Hindi-O', 'Hindi-PER', 'Hindi-LOC', 'Hindi-ORG',  # Task 1
-            'Bangla-O', 'Bangla-PER', 'Bangla-LOC', 'Bangla-ORG'  # Task 2
-        ]
+        # Class names (same for both tasks in Task-IL setting)
+        self.class_names = ['O', 'PER', 'LOC', 'ORG']
         return self.class_names

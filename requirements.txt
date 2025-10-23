@@ -9,3 +9,8 @@ onedrivedownloader
 ftfy
 regex
 pyyaml
+transformers>=4.30.0
+datasets>=2.12.0
+tokenizers>=0.13.0
+sentencepiece>=0.1.99
+pyarrow>=12.0.0
