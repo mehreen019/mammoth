@@ -25,6 +25,7 @@ def run_experiment(model, buffer_size=None, n_epochs=2, batch_size=16, lr=2e-5):
     cmd = [
         sys.executable, 'train_ner_continual.py',
         '--model', model,
+        '--n_classes', '4',  # Hindi-Bangla NER has 4 classes: O, PER, LOC, ORG
         '--batch_size', str(batch_size),
         '--n_epochs', str(n_epochs),
         '--lr', str(lr),
