@@ -38,6 +38,70 @@ HF_DATASETS_LIB = None
 HF_DOWNLOAD_CONFIG_CLS = None
 HUGGINGFACE_AVAILABLE = False
 
+def _patch_hf_dill_for_rlock(hf_datasets_module):
+    """
+    HuggingFace datasets <= 2.18 depends on dill<0.3.8 in some environments.
+    On Python 3.12 this triggers RuntimeError when hashing configs containing RLock objects.
+    This patch falls back to a deterministic placeholder when that specific error occurs.
+    """
+    try:
+        import dill  # type: ignore
+    except Exception:
+        return
+
+    version_str = getattr(dill, "__version__", "")
+    version_parts = [int(part) for part in version_str.split('.') if part.isdigit()]
+    while len(version_parts) < 3:
+        version_parts.append(0)
+    if tuple(version_parts[:3]) >= (0, 3, 8):
+        # Patched in dill>=0.3.8
+        return
+
+    hf_dill_utils = getattr(getattr(hf_datasets_module, "utils", None), "_dill", None)
+    if hf_dill_utils is None:
+        try:
+            from datasets.utils import _dill as hf_dill_utils  # type: ignore
+        except Exception:
+            return
+
+    if getattr(hf_dill_utils, "_mammoth_rlock_patch", False):
+        return
+
+    original_dump = getattr(hf_dill_utils, "dump", None)
+    original_dumps = getattr(hf_dill_utils, "dumps", None)
+    if original_dump is None or original_dumps is None:
+        return
+
+    import pickle
+
+    error_snippet = "RLock objects should only be shared between processes through inheritance"
+
+    def _placeholder_bytes(obj):
+        obj_type = getattr(type(obj), "__qualname__", type(obj).__name__)
+        return pickle.dumps(f"__hf_rlock_placeholder__:{obj_type}", protocol=pickle.HIGHEST_PROTOCOL)
+
+    def _safe_dump(obj, file, *args, **kwargs):
+        try:
+            return original_dump(obj, file, *args, **kwargs)
+        except RuntimeError as err:
+            if error_snippet not in str(err):
+                raise
+            file.write(_placeholder_bytes(obj))
+            return None
+
+    def _safe_dumps(obj, *args, **kwargs):
+        try:
+            return original_dumps(obj, *args, **kwargs)
+        except RuntimeError as err:
+            if error_snippet not in str(err):
+                raise
+            return _placeholder_bytes(obj)
+
+    hf_dill_utils.dump = _safe_dump  # type: ignore
+    hf_dill_utils.dumps = _safe_dumps  # type: ignore
+    hf_dill_utils._mammoth_rlock_patch = True
+
+
 def _import_hf_datasets():
     """Import HuggingFace datasets by temporarily removing mammoth dir from sys.path"""
     import sys
@@ -81,6 +145,8 @@ def _import_hf_datasets():
         # Verify we got the right module
         if not hasattr(hf_datasets, 'load_dataset'):
             raise ImportError("Got wrong datasets module")
+
+        _patch_hf_dill_for_rlock(hf_datasets)
 
         return hf_datasets, transformers
 
