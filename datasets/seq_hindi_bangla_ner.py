@@ -28,8 +28,9 @@ try:
     HUGGINGFACE_AVAILABLE = True
 except ImportError:
     HUGGINGFACE_AVAILABLE = False
-    print("Warning: HuggingFace datasets/transformers not installed.")
-    print("Install with: pip install datasets transformers")
+    load_dataset = None
+    AutoTokenizer = None
+    # Don't print warning here as it will show even if dataset is not being used
 
 
 class NERDatasetWrapper(Dataset):
@@ -140,17 +141,41 @@ class SequentialHindiBanglaNER(ContinualDataset):
     def __init__(self, args):
         super().__init__(args)
 
-        if not HUGGINGFACE_AVAILABLE:
-            import importlib
-            datasets = importlib.import_module("datasets")
-            transformers = importlib.import_module("transformers")
-            from datasets import load_dataset
-            from transformers import AutoTokenizer
-            print("✅ Dynamically loaded HuggingFace libraries at runtime")
+        # Ensure HuggingFace libraries are available
+        global HUGGINGFACE_AVAILABLE, load_dataset, AutoTokenizer
+        if not HUGGINGFACE_AVAILABLE or load_dataset is None or AutoTokenizer is None:
+            try:
+                # Try importing at runtime (handles delayed imports in some environments)
+                import datasets as _datasets_module
+                import transformers as _transformers_module
+                from datasets import load_dataset as _load_dataset
+                from transformers import AutoTokenizer as _AutoTokenizer
+
+                load_dataset = _load_dataset
+                AutoTokenizer = _AutoTokenizer
+                HUGGINGFACE_AVAILABLE = True
+                print(f"✅ HuggingFace libraries loaded: datasets={_datasets_module.__version__}, transformers={_transformers_module.__version__}")
+            except ImportError as e:
+                import sys
+                print("\n" + "="*60)
+                print("ERROR: HuggingFace libraries not found!")
+                print("="*60)
+                print(f"Python executable: {sys.executable}")
+                print(f"Python path: {sys.path[:3]}")
+                print("\nThis dataset requires: datasets and transformers")
+                print("\nInstall with:")
+                print("  pip install datasets transformers")
+                print("\nOr in Colab:")
+                print("  !pip install datasets transformers")
+                print("="*60)
+                raise ImportError(f"Failed to import HuggingFace libraries: {e}")
 
         # Use multilingual BERT tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained('bert-base-multilingual-cased')
-        self.max_length = 128
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained('bert-base-multilingual-cased')
+            self.max_length = 128
+        except Exception as e:
+            raise RuntimeError(f"Failed to load BERT multilingual tokenizer: {e}")
 
     def get_data_loaders(self) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
         """Load WikiANN Hindi and Bangla NER data"""
