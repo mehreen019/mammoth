@@ -196,9 +196,9 @@ def main():
 
     # Load Hindi data (Task 1)
     try:
-        from datasets import load_dataset
-        hindi_train = load_dataset('wikiann', 'hi', split='train[:500]')
-        hindi_test = load_dataset('wikiann', 'hi', split='validation[:100]')
+        from datasets import load_dataset as hf_load_dataset
+        hindi_train = hf_load_dataset('wikiann', 'hi', split='train[:500]')
+        hindi_test = hf_load_dataset('wikiann', 'hi', split='validation[:100]')
     except Exception as e:
         print(f"Error loading Hindi WikiANN: {e}")
         print("Using dummy data for demonstration...")
@@ -206,8 +206,9 @@ def main():
 
     # Load Bangla data (Task 2)
     try:
-        bangla_train = load_dataset('wikiann', 'bn', split='train[:500]')
-        bangla_test = load_dataset('wikiann', 'bn', split='validation[:100]')
+        from datasets import load_dataset as hf_load_dataset
+        bangla_train = hf_load_dataset('wikiann', 'bn', split='train[:500]')
+        bangla_test = hf_load_dataset('wikiann', 'bn', split='validation[:100]')
     except Exception as e:
         print(f"Error loading Bangla WikiANN: {e}")
         print("Using dummy data for demonstration...")
