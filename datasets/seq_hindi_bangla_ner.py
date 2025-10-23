@@ -259,20 +259,22 @@ class SequentialHindiBanglaNER(ContinualDataset):
             print("Using dummy data for demonstration...")
             bangla_train, bangla_test = self._create_dummy_data('bangla', 500, 100)
 
-        # Extract tokens and labels
+        # Extract tokens and labels - handle both real data and dummy data
+        # Hindi
         if isinstance(hindi_train, tuple):
-            # Dummy data
             hindi_train_texts, hindi_train_labels = hindi_train
             hindi_test_texts, hindi_test_labels = hindi_test
-            bangla_train_texts, bangla_train_labels = bangla_train
-            bangla_test_texts, bangla_test_labels = bangla_test
         else:
-            # Real WikiANN data
             hindi_train_texts = hindi_train['tokens']
             hindi_train_labels = hindi_train['ner_tags']
             hindi_test_texts = hindi_test['tokens']
             hindi_test_labels = hindi_test['ner_tags']
 
+        # Bangla
+        if isinstance(bangla_train, tuple):
+            bangla_train_texts, bangla_train_labels = bangla_train
+            bangla_test_texts, bangla_test_labels = bangla_test
+        else:
             bangla_train_texts = bangla_train['tokens']
             bangla_train_labels = bangla_train['ner_tags']
             bangla_test_texts = bangla_test['tokens']
