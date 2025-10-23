@@ -70,7 +70,7 @@ def _load_local_wikiann_split(lang_code: str, split: str):
     Expected layout: <base_path>/data/wikiann/<lang>/<split>.jsonl (or .json)
     where each record has 'tokens' and 'ner_tags'.
     """
-    dataset_root = os.path.join(base_path(), 'data', 'wikiann', lang_code)
+    dataset_root = os.path.join(base_path(), 'wikiann', lang_code)
     base_split, limit = _parse_split(split)
 
     candidates = [
@@ -268,7 +268,7 @@ def _load_wikiann_split(lang_code: str, split: str):
         return local_split
 
     # If we get here, local files were not found
-    expected_path = os.path.join(base_path(), 'data', 'wikiann', lang_code)
+    expected_path = os.path.join(base_path(), 'wikiann', lang_code)
     raise FileNotFoundError(
         f"\n{'='*80}\n"
         f"WikiANN dataset not found locally!\n"
