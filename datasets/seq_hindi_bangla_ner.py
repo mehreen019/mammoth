@@ -28,28 +28,38 @@ from datasets.utils import set_default_from_args
 
 # Now handle the HuggingFace datasets import
 # The issue: there's a naming conflict between the local 'datasets' folder and HuggingFace's 'datasets' package
-# Solution: Temporarily remove current directory from sys.path when importing HuggingFace packages
+# Solution: Use importlib to directly import from site-packages, bypassing the local datasets folder
 load_dataset = None
 AutoTokenizer = None
 HUGGINGFACE_AVAILABLE = False
 
 try:
-    # Save the current sys.path
-    original_path = sys.path.copy()
+    import importlib.util
+    import site
 
-    # Remove paths that contain the local 'datasets' folder to avoid conflict
-    current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    filtered_path = [p for p in sys.path if not (p == current_dir or p == '' or p == '.')]
+    # Method 1: Try to find HuggingFace datasets in site-packages
+    hf_datasets_module = None
+    for site_dir in site.getsitepackages() + [site.getusersitepackages()]:
+        if site_dir is None:
+            continue
+        datasets_init = os.path.join(site_dir, 'datasets', '__init__.py')
+        if os.path.exists(datasets_init):
+            # Load the module directly from this path
+            spec = importlib.util.spec_from_file_location("hf_datasets", datasets_init)
+            if spec and spec.loader:
+                hf_datasets_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(hf_datasets_module)
+                # Verify it's the right module (has load_dataset)
+                if hasattr(hf_datasets_module, 'load_dataset'):
+                    break
+                else:
+                    hf_datasets_module = None
 
-    # Temporarily use filtered path
-    sys.path = filtered_path
+    if hf_datasets_module is None:
+        raise ImportError("Could not find HuggingFace datasets package in site-packages")
 
-    # Now import from HuggingFace (won't conflict with local datasets folder)
-    import datasets as hf_datasets_module
+    # Import transformers normally (no conflict with this one)
     from transformers import AutoTokenizer as _AutoTokenizer
-
-    # Restore original path
-    sys.path = original_path
 
     # Extract the function we need
     load_dataset = hf_datasets_module.load_dataset
@@ -57,8 +67,6 @@ try:
     HUGGINGFACE_AVAILABLE = True
 
 except (ImportError, AttributeError) as e:
-    # Restore path even if import fails
-    sys.path = original_path if 'original_path' in locals() else sys.path
     HUGGINGFACE_AVAILABLE = False
     load_dataset = None
     AutoTokenizer = None
@@ -176,22 +184,37 @@ class SequentialHindiBanglaNER(ContinualDataset):
         global HUGGINGFACE_AVAILABLE, load_dataset, AutoTokenizer
         if not HUGGINGFACE_AVAILABLE or load_dataset is None or AutoTokenizer is None:
             try:
-                # Try importing at runtime using the same path-filtering technique
-                original_path = sys.path.copy()
-                current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                filtered_path = [p for p in sys.path if not (p == current_dir or p == '' or p == '.')]
+                # Try importing at runtime using importlib to bypass naming conflict
+                import importlib.util
+                import site
 
-                sys.path = filtered_path
-                import datasets as _datasets_module
+                # Find HuggingFace datasets in site-packages
+                hf_datasets_module = None
+                for site_dir in site.getsitepackages() + [site.getusersitepackages()]:
+                    if site_dir is None:
+                        continue
+                    datasets_init = os.path.join(site_dir, 'datasets', '__init__.py')
+                    if os.path.exists(datasets_init):
+                        spec = importlib.util.spec_from_file_location("hf_datasets_runtime", datasets_init)
+                        if spec and spec.loader:
+                            hf_datasets_module = importlib.util.module_from_spec(spec)
+                            spec.loader.exec_module(hf_datasets_module)
+                            if hasattr(hf_datasets_module, 'load_dataset'):
+                                break
+                            else:
+                                hf_datasets_module = None
+
+                if hf_datasets_module is None:
+                    raise ImportError("Could not find HuggingFace datasets in site-packages")
+
+                # Import transformers
                 import transformers as _transformers_module
-                sys.path = original_path
 
-                load_dataset = _datasets_module.load_dataset
+                load_dataset = hf_datasets_module.load_dataset
                 AutoTokenizer = _transformers_module.AutoTokenizer
                 HUGGINGFACE_AVAILABLE = True
-                print(f"✅ HuggingFace libraries loaded: datasets={_datasets_module.__version__}, transformers={_transformers_module.__version__}")
-            except ImportError as e:
-                sys.path = original_path if 'original_path' in locals() else sys.path
+                print(f"✅ HuggingFace libraries loaded: datasets={hf_datasets_module.__version__}, transformers={_transformers_module.__version__}")
+            except (ImportError, AttributeError) as e:
                 print("\n" + "="*60)
                 print("ERROR: HuggingFace libraries not found!")
                 print("="*60)
@@ -202,6 +225,8 @@ class SequentialHindiBanglaNER(ContinualDataset):
                 print("  pip install datasets transformers")
                 print("\nOr in Colab:")
                 print("  !pip install datasets transformers")
+                print("\nDebugging info:")
+                print(f"  site.getsitepackages(): {site.getsitepackages()}")
                 print("="*60)
                 raise ImportError(f"Failed to import HuggingFace libraries: {e}")
 
