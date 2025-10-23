@@ -20,6 +20,7 @@ from torch.utils.data import Dataset
 import sys
 import os
 import itertools
+import json
 
 # Avoid multiprocessing issues with HuggingFace datasets in restricted environments
 os.environ.setdefault("HF_DATASETS_DISABLE_MULTIPROCESSING", "1")
@@ -37,6 +38,81 @@ AutoTokenizer = None
 HF_DATASETS_LIB = None
 HF_DOWNLOAD_CONFIG_CLS = None
 HUGGINGFACE_AVAILABLE = False
+
+
+def _parse_split(split: str):
+    """Return (base_split, limit_or_None) for slicing expressions like 'train[:500]'."""
+    base_split = split
+    limit = None
+    if '[' in split and ']' in split:
+        base_split, bracket = split.split('[', 1)
+        bracket = bracket.strip(']')
+        if bracket:
+            # Support train[:500] and train[100:200] (use right bound)
+            if ':' in bracket:
+                right = bracket.split(':', 1)[1]
+                if right:
+                    try:
+                        limit = int(right)
+                    except ValueError:
+                        limit = None
+            else:
+                try:
+                    limit = int(bracket)
+                except ValueError:
+                    limit = None
+    return base_split, limit
+
+
+def _load_local_wikiann_split(lang_code: str, split: str):
+    """
+    Load a split from locally cached files.
+    Expected layout: <base_path>/data/wikiann/<lang>/<split>.jsonl (or .json)
+    where each record has 'tokens' and 'ner_tags'.
+    """
+    dataset_root = os.path.join(base_path(), 'data', 'wikiann', lang_code)
+    base_split, limit = _parse_split(split)
+
+    candidates = [
+        os.path.join(dataset_root, f"{base_split}.jsonl"),
+        os.path.join(dataset_root, f"{base_split}.json"),
+    ]
+
+    for path in candidates:
+        if os.path.exists(path):
+            tokens, ner_tags = [], []
+            try:
+                if path.endswith('.jsonl'):
+                    with open(path, 'r', encoding='utf-8') as handle:
+                        for line in handle:
+                            if not line.strip():
+                                continue
+                            sample = json.loads(line)
+                            tokens.append(sample['tokens'])
+                            ner_tags.append(sample['ner_tags'])
+                            if limit is not None and len(tokens) >= limit:
+                                break
+                else:  # .json
+                    with open(path, 'r', encoding='utf-8') as handle:
+                        data = json.load(handle)
+                    for sample in data:
+                        tokens.append(sample['tokens'])
+                        ner_tags.append(sample['ner_tags'])
+                        if limit is not None and len(tokens) >= limit:
+                            break
+            except Exception as local_err:
+                raise RuntimeError(f"Failed to parse local WikiANN file at {path}") from local_err
+
+            if not tokens:
+                raise RuntimeError(f"Local WikiANN file {path} is empty or missing required fields.")
+
+            return {
+                'tokens': tokens,
+                'ner_tags': ner_tags
+            }
+
+    return None
+
 
 def _patch_hf_dill_for_rlock(hf_datasets_module):
     """
@@ -194,8 +270,16 @@ def _load_wikiann_split(lang_code: str, split: str):
     Load a WikiANN split with fallbacks for multiprocessing lock issues observed
     when running inside restricted environments (Python >= 3.12).
     """
+    local_split = _load_local_wikiann_split(lang_code, split)
+    if local_split is not None:
+        return local_split
+
     if load_dataset is None:
-        raise ImportError("HuggingFace `load_dataset` is not available")
+        raise ImportError(
+            "HuggingFace `load_dataset` is not available and no local copy of "
+            f"WikiANN ({lang_code}, {split}) was found. Prepare the dataset under "
+            f"{os.path.join(base_path(), 'data', 'wikiann', lang_code)}."
+        )
 
     try:
         return load_dataset('wikiann', lang_code, split=split, keep_in_memory=True, num_proc=1)
