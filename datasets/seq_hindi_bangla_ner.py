@@ -246,107 +246,48 @@ except Exception as e:
 
 
 def _streaming_subset(lang_code: str, base_split: str, limit: int):
-    """Fallback loader that streams WikiANN samples without multiprocessing."""
-    if load_dataset is None:
-        raise ImportError("HuggingFace `load_dataset` is not available")
-
-    stream = load_dataset('wikiann', lang_code, split=base_split, streaming=True)
-    tokens, ner_tags = [], []
-    for example in itertools.islice(stream, limit):
-        tokens.append(example['tokens'])
-        ner_tags.append(example['ner_tags'])
-
-    if not tokens:
-        raise RuntimeError(f"Failed to stream WikiANN ({lang_code}, {base_split}) subset.")
-
-    return {
-        'tokens': tokens,
-        'ner_tags': ner_tags
-    }
+    """DEPRECATED: This function is no longer used. Local files are required."""
+    raise RuntimeError(
+        f"Cannot stream WikiANN data from HuggingFace. Please download the dataset locally using download_wikiann.py\n"
+        f"Expected location: {os.path.join(base_path(), 'data', 'wikiann', lang_code)}\n"
+        f"Run: python download_wikiann.py"
+    )
 
 
 def _load_wikiann_split(lang_code: str, split: str):
     """
-    Load a WikiANN split with fallbacks for multiprocessing lock issues observed
-    when running inside restricted environments (Python >= 3.12).
+    Load a WikiANN split from local files ONLY.
+
+    This function no longer attempts to download from HuggingFace to avoid
+    RLock pickling errors in Python 3.12+ environments (especially Colab).
+
+    Use download_wikiann.py to prepare the dataset locally first.
     """
     local_split = _load_local_wikiann_split(lang_code, split)
     if local_split is not None:
         return local_split
 
-    if load_dataset is None:
-        raise ImportError(
-            "HuggingFace `load_dataset` is not available and no local copy of "
-            f"WikiANN ({lang_code}, {split}) was found. Prepare the dataset under "
-            f"{os.path.join(base_path(), 'data', 'wikiann', lang_code)}."
-        )
-
-    try:
-        return load_dataset('wikiann', lang_code, split=split, keep_in_memory=True, num_proc=1)
-    except Exception as err:
-        err_msg = str(err)
-        if "RLock objects should only be shared between processes through inheritance" not in err_msg:
-            raise
-
-        print(f"Encountered multiprocessing lock issue while loading WikiANN ({lang_code}, {split}). Retrying with caching disabled...")
-
-        extra_kwargs = {'keep_in_memory': True}
-        if HF_DOWNLOAD_CONFIG_CLS is not None:
-            try:
-                extra_kwargs['download_config'] = HF_DOWNLOAD_CONFIG_CLS(num_proc=1, max_workers=1)
-            except TypeError:
-                try:
-                    extra_kwargs['download_config'] = HF_DOWNLOAD_CONFIG_CLS(max_workers=1)
-                except Exception:
-                    pass
-
-        if HF_DATASETS_LIB is not None:
-            try:
-                HF_DATASETS_LIB.disable_caching()
-            except Exception:
-                pass
-
-        try:
-            return load_dataset('wikiann', lang_code, split=split, num_proc=1, **extra_kwargs)
-        except Exception as second_err:
-            second_msg = str(second_err)
-            if "RLock objects should only be shared between processes through inheritance" not in second_msg:
-                raise
-
-            # Builder fallback - force single process download/prepare
-            if HF_DATASETS_LIB is not None:
-                print(f"Attempting builder fallback for WikiANN ({lang_code}, {split})...")
-                try:
-                    builder = HF_DATASETS_LIB.load_dataset_builder('wikiann', lang_code)
-                    prepare_kwargs = {'num_proc': 1}
-                    if HF_DOWNLOAD_CONFIG_CLS is not None:
-                        try:
-                            prepare_kwargs['download_config'] = HF_DOWNLOAD_CONFIG_CLS(num_proc=1, max_workers=1)
-                        except TypeError:
-                            try:
-                                prepare_kwargs['download_config'] = HF_DOWNLOAD_CONFIG_CLS(max_workers=1)
-                            except Exception:
-                                pass
-                    builder.download_and_prepare(**prepare_kwargs)
-                    return builder.as_dataset(split=split)
-                except Exception as builder_err:
-                    builder_msg = str(builder_err)
-                    if "RLock objects should only be shared between processes through inheritance" not in builder_msg:
-                        raise
-                    print(f"Builder fallback also failed with multiprocessing lock for WikiANN ({lang_code}, {split}).")
-
-            print(f"Switching to streaming fallback for WikiANN ({lang_code}, {split})...")
-            base_split = split
-            limit = 500
-            if '[' in split and ']' in split and ':' in split:
-                base_split, subset = split.split('[', 1)
-                subset = subset.strip(']')
-                if subset.startswith(':'):
-                    try:
-                        limit = int(subset[1:])
-                    except ValueError:
-                        limit = 500
-            return _streaming_subset(lang_code, base_split, limit)
+    # If we get here, local files were not found
+    expected_path = os.path.join(base_path(), 'data', 'wikiann', lang_code)
+    raise FileNotFoundError(
+        f"\n{'='*80}\n"
+        f"WikiANN dataset not found locally!\n"
+        f"{'='*80}\n"
+        f"Language: {lang_code}\n"
+        f"Split: {split}\n"
+        f"Expected location: {expected_path}\n"
+        f"\n"
+        f"To fix this:\n"
+        f"1. Run locally (not in Colab): python download_wikiann.py\n"
+        f"2. This will create files in data/wikiann/{{hi,bn}}/\n"
+        f"3. Upload these files to Colab at: /content/mammoth/data/wikiann/{{hi,bn}}/\n"
+        f"\n"
+        f"Required files:\n"
+        f"  - {os.path.join(expected_path, 'train.jsonl')}\n"
+        f"  - {os.path.join(expected_path, 'validation.jsonl')}\n"
+        f"  - {os.path.join(expected_path, 'test.jsonl')}\n"
+        f"{'='*80}\n"
+    )
 
 
 class NERDatasetWrapper(Dataset):
@@ -499,36 +440,12 @@ class SequentialHindiBanglaNER(ContinualDataset):
         print("Loading WikiANN dataset for Hindi and Bangla...")
 
         # Load Hindi data (Task 0)
-        try:
-            hindi_train = _load_wikiann_split('hi', 'train[:500]')  # Smaller for speed
-            hindi_test = _load_wikiann_split('hi', 'validation[:100]')
-        except Exception as e:
-            help_msg = (
-                "\n"
-                "Failed to load the Hindi WikiANN split.\n"
-                "Colab runtimes often pin dill==0.3.7 which is incompatible with multiprocess 0.70.16 "
-                "on Python 3.12. Run the following in a fresh Colab cell, restart the runtime, and try again:\n"
-                "  !pip install -U pip\n"
-                "  !pip install -U \"dill>=0.3.8\" \"multiprocess>=0.70.16\" \"datasets>=2.18\"\n"
-                "If you are running locally, make sure the same versions are active in your environment."
-            )
-            raise RuntimeError(help_msg) from e
+        hindi_train = _load_wikiann_split('hi', 'train[:500]')  # Smaller for speed
+        hindi_test = _load_wikiann_split('hi', 'validation[:100]')
 
         # Load Bangla data (Task 1)
-        try:
-            bangla_train = _load_wikiann_split('bn', 'train[:500]')
-            bangla_test = _load_wikiann_split('bn', 'validation[:100]')
-        except Exception as e:
-            help_msg = (
-                "\n"
-                "Failed to load the Bangla WikiANN split.\n"
-                "Colab runtimes often pin dill==0.3.7 which is incompatible with multiprocess 0.70.16 "
-                "on Python 3.12. Run the following in a fresh Colab cell, restart the runtime, and try again:\n"
-                "  !pip install -U pip\n"
-                "  !pip install -U \"dill>=0.3.8\" \"multiprocess>=0.70.16\" \"datasets>=2.18\"\n"
-                "If you are running locally, make sure the same versions are active in your environment."
-            )
-            raise RuntimeError(help_msg) from e
+        bangla_train = _load_wikiann_split('bn', 'train[:500]')
+        bangla_test = _load_wikiann_split('bn', 'validation[:100]')
 
         def _extract_texts_and_labels(split, split_name: str):
             """Normalize HuggingFace or tuple-based split outputs into (texts, labels) lists."""
