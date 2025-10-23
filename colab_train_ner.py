@@ -7,13 +7,15 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
-import numpy as np
 from tqdm import tqdm
-import os
 
 # Import custom modules
 from backbone.bert_multilingual import BERTMultilingualBackbone
-from visualize_ner_results import create_summary_report, visualize_predictions
+from datasets.seq_hindi_bangla_ner import NERDatasetWrapper
+from visualize_ner_results import (
+    create_summary_report,
+    visualize_predictions
+)
 
 
 # NER Tag Definitions (BIO format for Hindi-Bangla NER)
@@ -33,58 +35,31 @@ IDX_TO_TAG = {v: k for k, v in TAG_TO_IDX.items()}
 CLASS_NAMES = list(TAG_TO_IDX.keys())
 
 
-class DummyNERDataset(torch.utils.data.Dataset):
-    """
-    Dummy dataset for demonstration purposes
-    Replace this with your actual Hindi-Bangla NER dataset
-    """
-    def __init__(self, tokenizer, num_samples=100, max_length=128):
-        self.tokenizer = tokenizer
-        self.num_samples = num_samples
-        self.max_length = max_length
+def _create_dummy_ner_data(lang, n_train, n_test):
+    """Create dummy NER data for testing when WikiANN is unavailable"""
+    import random
 
-        # Sample sentences (mix of Hindi, Bangla, and English for demo)
-        self.sentences = [
-            "राम दिल्ली में रहते हैं।",
-            "সে ঢাকায় বাস করে।",
-            "Google is a company in California.",
-            "मोहन और सीता मुंबई गए।",
-            "আমি কলকাতায় জন্মেছি।"
-        ] * (num_samples // 5 + 1)
+    vocab = {
+        'hindi': ['राम', 'दिल्ली', 'भारत', 'गूगल', 'सीता', 'मुंबई'],
+        'bangla': ['রাম', 'ঢাকা', 'বাংলাদেশ', 'গুগল', 'সীতা', 'কলকাতা']
+    }
 
-        # Dummy labels (random for demo - replace with real labels)
-        self.labels = []
-        for _ in range(num_samples):
-            # Generate random sequence of tags
-            seq_len = np.random.randint(10, max_length)
-            tags = np.random.choice(len(TAG_TO_IDX), size=seq_len)
-            self.labels.append(tags.tolist())
+    def generate_sample():
+        tokens = random.choices(vocab[lang], k=random.randint(5, 15))
+        # Random NER tags (0=O, 1-2=PER, 3-4=LOC, 5-6=ORG)
+        labels = [random.randint(0, 6) for _ in tokens]
+        return tokens, labels
 
-    def __len__(self):
-        return self.num_samples
+    train_data = [generate_sample() for _ in range(n_train)]
+    test_data = [generate_sample() for _ in range(n_test)]
 
-    def __getitem__(self, idx):
-        sentence = self.sentences[idx % len(self.sentences)]
-        labels = self.labels[idx]
+    train_texts, train_labels = zip(*train_data)
+    test_texts, test_labels = zip(*test_data)
 
-        # Tokenize
-        encoding = self.tokenizer(
-            sentence,
-            max_length=self.max_length,
-            padding='max_length',
-            truncation=True,
-            return_tensors='pt'
-        )
+    return (train_texts, train_labels), (test_texts, test_labels)
 
-        # Pad labels to match tokenized length
-        label_tensor = torch.zeros(self.max_length, dtype=torch.long)
-        label_tensor[:len(labels)] = torch.tensor(labels[:self.max_length])
 
-        return {
-            'input_ids': encoding['input_ids'].squeeze(0),
-            'attention_mask': encoding['attention_mask'].squeeze(0),
-            'labels': label_tensor
-        }
+
 
 
 def train_epoch(model, dataloader, optimizer, criterion, device):
@@ -96,18 +71,18 @@ def train_epoch(model, dataloader, optimizer, criterion, device):
 
     pbar = tqdm(dataloader, desc='Training')
     for batch in pbar:
-        input_ids = batch['input_ids'].to(device)
-        attention_mask = batch['attention_mask'].to(device)
-        labels = batch['labels'].to(device)
+        # Unpack batch: (input_ids, label, attention_mask)
+        input_ids = batch[0].to(device)
+        labels = batch[1].to(device)
+        attention_mask = batch[2].to(device)
 
         optimizer.zero_grad()
 
-        # Forward pass (using CLS token classification for demo)
+        # Forward pass through BERT backbone
         outputs = model((input_ids, attention_mask))
 
-        # For simplicity, we'll use the first token's label
-        # In real NER, you'd classify each token
-        loss = criterion(outputs, labels[:, 0])
+        # Compute loss
+        loss = criterion(outputs, labels)
 
         # Backward pass
         loss.backward()
@@ -115,7 +90,7 @@ def train_epoch(model, dataloader, optimizer, criterion, device):
 
         # Calculate accuracy
         predictions = outputs.argmax(dim=1)
-        correct += (predictions == labels[:, 0]).sum().item()
+        correct += (predictions == labels).sum().item()
         total += labels.size(0)
 
         total_loss += loss.item()
@@ -136,21 +111,22 @@ def evaluate(model, dataloader, criterion, device):
     with torch.no_grad():
         pbar = tqdm(dataloader, desc='Evaluating')
         for batch in pbar:
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            labels = batch['labels'].to(device)
+            # Unpack batch: (input_ids, label, attention_mask)
+            input_ids = batch[0].to(device)
+            labels = batch[1].to(device)
+            attention_mask = batch[2].to(device)
 
             outputs = model((input_ids, attention_mask))
-            loss = criterion(outputs, labels[:, 0])
+            loss = criterion(outputs, labels)
 
             predictions = outputs.argmax(dim=1)
-            correct += (predictions == labels[:, 0]).sum().item()
+            correct += (predictions == labels).sum().item()
             total += labels.size(0)
             total_loss += loss.item()
 
             # Store for confusion matrix
             all_preds.extend(predictions.cpu().numpy())
-            all_labels.extend(labels[:, 0].cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
 
             pbar.set_postfix({'loss': loss.item(), 'acc': correct/total*100})
 
@@ -170,9 +146,10 @@ def get_sample_predictions(model, dataloader, tokenizer, device, num_samples=3):
             if i >= num_samples:
                 break
 
-            input_ids = batch['input_ids'][0].unsqueeze(0).to(device)
-            attention_mask = batch['attention_mask'][0].unsqueeze(0).to(device)
-            labels = batch['labels'][0]
+            # Unpack batch: (input_ids, label, attention_mask)
+            input_ids = batch[0][0].unsqueeze(0).to(device)
+            attention_mask = batch[2][0].unsqueeze(0).to(device)
+            label = batch[1][0].item()
 
             outputs = model((input_ids, attention_mask))
             prediction = outputs.argmax(dim=1).item()
@@ -182,8 +159,11 @@ def get_sample_predictions(model, dataloader, tokenizer, device, num_samples=3):
             tokens = [t for t in tokens if t not in ['[PAD]', '[CLS]', '[SEP]']][:10]  # First 10 tokens
 
             # Get corresponding labels
-            true_tags = [IDX_TO_TAG[labels[j].item()] for j in range(len(tokens))]
-            pred_tags = [IDX_TO_TAG[prediction]] * len(tokens)  # Simplified for demo
+            true_tag = IDX_TO_TAG.get(label, 'O')
+            pred_tag = IDX_TO_TAG.get(prediction, 'O')
+
+            true_tags = [true_tag] * len(tokens)
+            pred_tags = [pred_tag] * len(tokens)
 
             tokens_list.append(tokens)
             true_tags_list.append(true_tags)
@@ -202,8 +182,6 @@ def main():
     BATCH_SIZE = 16
     EPOCHS = 5
     LEARNING_RATE = 2e-5
-    NUM_TRAIN_SAMPLES = 200
-    NUM_VAL_SAMPLES = 50
 
     # Device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -213,10 +191,68 @@ def main():
     print("\nLoading BERT tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained('bert-base-multilingual-cased')
 
-    # Create datasets
-    print("Creating datasets...")
-    train_dataset = DummyNERDataset(tokenizer, num_samples=NUM_TRAIN_SAMPLES)
-    val_dataset = DummyNERDataset(tokenizer, num_samples=NUM_VAL_SAMPLES)
+    # Create datasets using actual Hindi-Bangla NER data
+    print("Creating Hindi-Bangla NER datasets...")
+
+    # Load Hindi data (Task 1)
+    try:
+        from datasets import load_dataset
+        hindi_train = load_dataset('wikiann', 'hi', split='train[:500]')
+        hindi_test = load_dataset('wikiann', 'hi', split='validation[:100]')
+    except Exception as e:
+        print(f"Error loading Hindi WikiANN: {e}")
+        print("Using dummy data for demonstration...")
+        hindi_train, hindi_test = _create_dummy_ner_data('hindi', 500, 100)
+
+    # Load Bangla data (Task 2)
+    try:
+        bangla_train = load_dataset('wikiann', 'bn', split='train[:500]')
+        bangla_test = load_dataset('wikiann', 'bn', split='validation[:100]')
+    except Exception as e:
+        print(f"Error loading Bangla WikiANN: {e}")
+        print("Using dummy data for demonstration...")
+        bangla_train, bangla_test = _create_dummy_ner_data('bangla', 500, 100)
+
+    # Extract tokens and labels
+    if isinstance(hindi_train, tuple):
+        # Dummy data
+        hindi_train_texts, hindi_train_labels = hindi_train
+        hindi_test_texts, hindi_test_labels = hindi_test
+        bangla_train_texts, bangla_train_labels = bangla_train
+        bangla_test_texts, bangla_test_labels = bangla_test
+    else:
+        # Real WikiANN data
+        hindi_train_texts = hindi_train['tokens']
+        hindi_train_labels = hindi_train['ner_tags']
+        hindi_test_texts = hindi_test['tokens']
+        hindi_test_labels = hindi_test['ner_tags']
+
+        bangla_train_texts = bangla_train['tokens']
+        bangla_train_labels = bangla_train['ner_tags']
+        bangla_test_texts = bangla_test['tokens']
+        bangla_test_labels = bangla_test['ner_tags']
+
+    # Combine datasets (Hindi first, then Bangla for sequential learning)
+    all_train_texts = list(hindi_train_texts) + list(bangla_train_texts)
+    all_train_labels = list(hindi_train_labels) + list(bangla_train_labels)
+    all_test_texts = list(hindi_test_texts) + list(bangla_test_texts)
+    all_test_labels = list(hindi_test_labels) + list(bangla_test_labels)
+
+    # Create dataset wrappers
+    train_dataset = NERDatasetWrapper(
+        all_train_texts,
+        all_train_labels,
+        tokenizer,
+        max_length=128
+    )
+    val_dataset = NERDatasetWrapper(
+        all_test_texts,
+        all_test_labels,
+        tokenizer,
+        max_length=128
+    )
+
+    print(f"Dataset loaded: {len(train_dataset)} train, {len(val_dataset)} test samples")
 
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
@@ -251,7 +287,7 @@ def main():
         train_loss, train_acc = train_epoch(model, train_loader, optimizer, criterion, device)
 
         # Validate
-        val_loss, val_acc, val_preds, val_labels = evaluate(model, val_loader, criterion, device)
+        val_loss, val_acc, _, _ = evaluate(model, val_loader, criterion, device)
 
         # Store history
         history['train_loss'].append(train_loss)
@@ -269,7 +305,7 @@ def main():
 
     # Get final predictions for visualization
     print("\nGenerating predictions for visualization...")
-    final_val_loss, final_val_acc, all_preds, all_labels = evaluate(
+    _, _, all_preds, all_labels = evaluate(
         model, val_loader, criterion, device
     )
 
