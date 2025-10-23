@@ -26,47 +26,30 @@ from datasets.utils.continual_dataset import ContinualDataset, store_masked_load
 from utils.conf import base_path
 from datasets.utils import set_default_from_args
 
-# Now handle the HuggingFace datasets import
-# The issue: there's a naming conflict between the local 'datasets' folder and HuggingFace's 'datasets' package
-# Solution: Remove the conflicting path from sys.modules and sys.path before importing
+# Handle the HuggingFace import using __import__ to avoid naming conflict
 load_dataset = None
 AutoTokenizer = None
 HUGGINGFACE_AVAILABLE = False
 
+def _import_hf_datasets():
+    """Import HuggingFace datasets using __import__ to bypass naming conflict"""
+    try:
+        # Use __import__ with fromlist to get the actual module
+        hf_datasets = __import__('datasets', fromlist=['load_dataset'], level=0)
+        # Check if this is actually the HuggingFace package (has load_dataset)
+        if not hasattr(hf_datasets, 'load_dataset'):
+            return None, None
+        transformers = __import__('transformers', fromlist=['AutoTokenizer'], level=0)
+        return hf_datasets.load_dataset, transformers.AutoTokenizer
+    except:
+        return None, None
+
 try:
-    # Save and remove the local 'datasets' module from sys.modules to avoid conflict
-    local_datasets_backup = sys.modules.get('datasets', None)
-    if 'datasets' in sys.modules:
-        del sys.modules['datasets']
-
-    # Temporarily remove current directory from sys.path
-    current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    sys_path_backup = sys.path.copy()
-    sys.path = [p for p in sys.path if os.path.abspath(p) != current_dir]
-
-    # Now import HuggingFace datasets (without the conflict)
-    import datasets as hf_datasets
-    from transformers import AutoTokenizer as _AutoTokenizer
-
-    # Restore sys.path and local datasets module
-    sys.path = sys_path_backup
-    if local_datasets_backup is not None:
-        sys.modules['datasets'] = local_datasets_backup
-
-    # Keep references to what we need
-    load_dataset = hf_datasets.load_dataset
-    AutoTokenizer = _AutoTokenizer
-    HUGGINGFACE_AVAILABLE = True
-
-except Exception as e:
-    # Restore everything even on error
-    sys.path = sys_path_backup if 'sys_path_backup' in locals() else sys.path
-    if 'local_datasets_backup' in locals() and local_datasets_backup is not None:
-        sys.modules['datasets'] = local_datasets_backup
-
-    HUGGINGFACE_AVAILABLE = False
-    load_dataset = None
-    AutoTokenizer = None
+    load_dataset, AutoTokenizer = _import_hf_datasets()
+    if load_dataset is not None and AutoTokenizer is not None:
+        HUGGINGFACE_AVAILABLE = True
+except:
+    pass
 
 
 class NERDatasetWrapper(Dataset):
@@ -180,40 +163,19 @@ class SequentialHindiBanglaNER(ContinualDataset):
         # Ensure HuggingFace libraries are available
         global HUGGINGFACE_AVAILABLE, load_dataset, AutoTokenizer
         if not HUGGINGFACE_AVAILABLE or load_dataset is None or AutoTokenizer is None:
-            try:
-                # Try the same import trick at runtime
-                local_datasets_backup = sys.modules.get('datasets', None)
-                if 'datasets' in sys.modules:
-                    del sys.modules['datasets']
-
-                current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                sys_path_backup = sys.path.copy()
-                sys.path = [p for p in sys.path if os.path.abspath(p) != current_dir]
-
-                import datasets as hf_datasets
-                import transformers
-
-                sys.path = sys_path_backup
-                if local_datasets_backup is not None:
-                    sys.modules['datasets'] = local_datasets_backup
-
-                load_dataset = hf_datasets.load_dataset
-                AutoTokenizer = transformers.AutoTokenizer
-                HUGGINGFACE_AVAILABLE = True
-                print(f"✅ HuggingFace libraries loaded: datasets={hf_datasets.__version__}, transformers={transformers.__version__}")
-            except Exception as e:
-                sys.path = sys_path_backup if 'sys_path_backup' in locals() else sys.path
-                if 'local_datasets_backup' in locals() and local_datasets_backup is not None:
-                    sys.modules['datasets'] = local_datasets_backup
-
+            load_dataset, AutoTokenizer = _import_hf_datasets()
+            if load_dataset is None or AutoTokenizer is None:
                 raise ImportError(
-                    f"\n{'='*60}\n"
-                    f"ERROR: Cannot import HuggingFace libraries!\n"
-                    f"{'='*60}\n"
-                    f"Please install with: pip install datasets transformers\n"
-                    f"Error details: {e}\n"
-                    f"{'='*60}"
+                    "\n" + "="*60 + "\n"
+                    "ERROR: Cannot import HuggingFace libraries!\n"
+                    "="*60 + "\n"
+                    "Please run in Colab:\n"
+                    "  !pip install datasets transformers\n"
+                    "Then restart the runtime.\n"
+                    "="*60
                 )
+            HUGGINGFACE_AVAILABLE = True
+            print(f"✅ HuggingFace libraries loaded successfully")
 
         # Use multilingual BERT tokenizer
         try:
