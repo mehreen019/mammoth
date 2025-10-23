@@ -17,20 +17,51 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from torch.utils.data import Dataset
+import sys
+import os
 
+# IMPORTANT: Must import local datasets utilities BEFORE trying to import HuggingFace datasets
+# to avoid import conflicts
 from datasets.utils.continual_dataset import ContinualDataset, store_masked_loaders
 from utils.conf import base_path
 from datasets.utils import set_default_from_args
 
+# Now handle the HuggingFace datasets import
+# The issue: there's a naming conflict between the local 'datasets' folder and HuggingFace's 'datasets' package
+# Solution: Temporarily remove current directory from sys.path when importing HuggingFace packages
+load_dataset = None
+AutoTokenizer = None
+HUGGINGFACE_AVAILABLE = False
+
 try:
-    from datasets import load_dataset
-    from transformers import AutoTokenizer
+    # Save the current sys.path
+    original_path = sys.path.copy()
+
+    # Remove paths that contain the local 'datasets' folder to avoid conflict
+    current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    filtered_path = [p for p in sys.path if not (p == current_dir or p == '' or p == '.')]
+
+    # Temporarily use filtered path
+    sys.path = filtered_path
+
+    # Now import from HuggingFace (won't conflict with local datasets folder)
+    import datasets as hf_datasets_module
+    from transformers import AutoTokenizer as _AutoTokenizer
+
+    # Restore original path
+    sys.path = original_path
+
+    # Extract the function we need
+    load_dataset = hf_datasets_module.load_dataset
+    AutoTokenizer = _AutoTokenizer
     HUGGINGFACE_AVAILABLE = True
-except ImportError:
+
+except (ImportError, AttributeError) as e:
+    # Restore path even if import fails
+    sys.path = original_path if 'original_path' in locals() else sys.path
     HUGGINGFACE_AVAILABLE = False
     load_dataset = None
     AutoTokenizer = None
-    # Don't print warning here as it will show even if dataset is not being used
 
 
 class NERDatasetWrapper(Dataset):
@@ -145,23 +176,27 @@ class SequentialHindiBanglaNER(ContinualDataset):
         global HUGGINGFACE_AVAILABLE, load_dataset, AutoTokenizer
         if not HUGGINGFACE_AVAILABLE or load_dataset is None or AutoTokenizer is None:
             try:
-                # Try importing at runtime (handles delayed imports in some environments)
+                # Try importing at runtime using the same path-filtering technique
+                original_path = sys.path.copy()
+                current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                filtered_path = [p for p in sys.path if not (p == current_dir or p == '' or p == '.')]
+
+                sys.path = filtered_path
                 import datasets as _datasets_module
                 import transformers as _transformers_module
-                from datasets import load_dataset as _load_dataset
-                from transformers import AutoTokenizer as _AutoTokenizer
+                sys.path = original_path
 
-                load_dataset = _load_dataset
-                AutoTokenizer = _AutoTokenizer
+                load_dataset = _datasets_module.load_dataset
+                AutoTokenizer = _transformers_module.AutoTokenizer
                 HUGGINGFACE_AVAILABLE = True
                 print(f"✅ HuggingFace libraries loaded: datasets={_datasets_module.__version__}, transformers={_transformers_module.__version__}")
             except ImportError as e:
-                import sys
+                sys.path = original_path if 'original_path' in locals() else sys.path
                 print("\n" + "="*60)
                 print("ERROR: HuggingFace libraries not found!")
                 print("="*60)
                 print(f"Python executable: {sys.executable}")
-                print(f"Python path: {sys.path[:3]}")
+                print(f"Python path (first 3): {sys.path[:3]}")
                 print("\nThis dataset requires: datasets and transformers")
                 print("\nInstall with:")
                 print("  pip install datasets transformers")
