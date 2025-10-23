@@ -29,6 +29,8 @@ from datasets.utils import set_default_from_args
 # Handle the HuggingFace import - must manipulate sys.path to avoid local datasets folder
 load_dataset = None
 AutoTokenizer = None
+HF_DATASETS_LIB = None
+HF_DOWNLOAD_CONFIG_CLS = None
 HUGGINGFACE_AVAILABLE = False
 
 def _import_hf_datasets():
@@ -75,11 +77,7 @@ def _import_hf_datasets():
         if not hasattr(hf_datasets, 'load_dataset'):
             raise ImportError("Got wrong datasets module")
 
-        # Extract what we need
-        load_func = hf_datasets.load_dataset
-        tokenizer_class = transformers.AutoTokenizer
-
-        return load_func, tokenizer_class
+        return hf_datasets, transformers
 
     finally:
         # Always restore original state
@@ -88,12 +86,52 @@ def _import_hf_datasets():
             sys.modules[key] = value
 
 try:
-    load_dataset, AutoTokenizer = _import_hf_datasets()
-    if load_dataset is not None and AutoTokenizer is not None:
+    hf_datasets_module, transformers_module = _import_hf_datasets()
+    if hf_datasets_module is not None and transformers_module is not None:
+        load_dataset = hf_datasets_module.load_dataset
+        AutoTokenizer = transformers_module.AutoTokenizer
+        HF_DATASETS_LIB = hf_datasets_module
+        HF_DOWNLOAD_CONFIG_CLS = getattr(hf_datasets_module, "DownloadConfig", None)
         HUGGINGFACE_AVAILABLE = True
 except Exception as e:
     # Failed to import, will try again at runtime
     pass
+
+
+def _load_wikiann_split(lang_code: str, split: str):
+    """
+    Load a WikiANN split with fallbacks for multiprocessing lock issues observed
+    when running inside restricted environments (Python >= 3.12).
+    """
+    if load_dataset is None:
+        raise ImportError("HuggingFace `load_dataset` is not available")
+
+    try:
+        return load_dataset('wikiann', lang_code, split=split)
+    except Exception as err:
+        err_msg = str(err)
+        if "RLock objects should only be shared between processes through inheritance" not in err_msg:
+            raise
+
+        print(f"Encountered multiprocessing lock issue while loading WikiANN ({lang_code}, {split}). Retrying with caching disabled...")
+
+        extra_kwargs = {'keep_in_memory': True}
+        if HF_DOWNLOAD_CONFIG_CLS is not None:
+            try:
+                extra_kwargs['download_config'] = HF_DOWNLOAD_CONFIG_CLS(num_proc=1, max_workers=1)
+            except TypeError:
+                try:
+                    extra_kwargs['download_config'] = HF_DOWNLOAD_CONFIG_CLS(max_workers=1)
+                except Exception:
+                    pass
+
+        if HF_DATASETS_LIB is not None:
+            try:
+                HF_DATASETS_LIB.disable_caching()
+            except Exception:
+                pass
+
+        return load_dataset('wikiann', lang_code, split=split, **extra_kwargs)
 
 
 class NERDatasetWrapper(Dataset):
@@ -213,10 +251,10 @@ class SequentialHindiBanglaNER(ContinualDataset):
         super().__init__(args)
 
         # Ensure HuggingFace libraries are available
-        global HUGGINGFACE_AVAILABLE, load_dataset, AutoTokenizer
+        global HUGGINGFACE_AVAILABLE, load_dataset, AutoTokenizer, HF_DATASETS_LIB, HF_DOWNLOAD_CONFIG_CLS
         if not HUGGINGFACE_AVAILABLE or load_dataset is None or AutoTokenizer is None:
-            load_dataset, AutoTokenizer = _import_hf_datasets()
-            if load_dataset is None or AutoTokenizer is None:
+            hf_datasets_module, transformers_module = _import_hf_datasets()
+            if hf_datasets_module is None or transformers_module is None:
                 raise ImportError(
                     "\n" + "="*60 + "\n"
                     "ERROR: Cannot import HuggingFace libraries!\n"
@@ -226,6 +264,10 @@ class SequentialHindiBanglaNER(ContinualDataset):
                     "Then restart the runtime.\n"
                     "="*60
                 )
+            load_dataset = hf_datasets_module.load_dataset
+            AutoTokenizer = transformers_module.AutoTokenizer
+            HF_DATASETS_LIB = hf_datasets_module
+            HF_DOWNLOAD_CONFIG_CLS = getattr(hf_datasets_module, "DownloadConfig", None)
             HUGGINGFACE_AVAILABLE = True
             print(f"✅ HuggingFace libraries loaded successfully")
 
@@ -243,8 +285,8 @@ class SequentialHindiBanglaNER(ContinualDataset):
 
         # Load Hindi data (Task 0)
         try:
-            hindi_train = load_dataset('wikiann', 'hi', split='train[:500]')  # Smaller for speed
-            hindi_test = load_dataset('wikiann', 'hi', split='validation[:100]')
+            hindi_train = _load_wikiann_split('hi', 'train[:500]')  # Smaller for speed
+            hindi_test = _load_wikiann_split('hi', 'validation[:100]')
         except Exception as e:
             print(f"Error loading Hindi WikiANN: {e}")
             print("Using dummy data for demonstration...")
@@ -252,8 +294,8 @@ class SequentialHindiBanglaNER(ContinualDataset):
 
         # Load Bangla data (Task 1)
         try:
-            bangla_train = load_dataset('wikiann', 'bn', split='train[:500]')
-            bangla_test = load_dataset('wikiann', 'bn', split='validation[:100]')
+            bangla_train = _load_wikiann_split('bn', 'train[:500]')
+            bangla_test = _load_wikiann_split('bn', 'validation[:100]')
         except Exception as e:
             print(f"Error loading Bangla WikiANN: {e}")
             print("Using dummy data for demonstration...")
