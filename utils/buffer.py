@@ -407,7 +407,10 @@ class Buffer:
         for attr_str in self.attributes:
             attr = eval(attr_str)
             if attr is not None and not hasattr(self, attr_str):  # create tensor if not already present
-                typ = torch.int64 if attr_str.endswith('els') else torch.float32
+                if isinstance(attr, torch.Tensor):
+                    typ = attr.dtype
+                else:
+                    typ = torch.int64 if attr_str.endswith('els') else torch.float32
                 setattr(self, attr_str, torch.zeros((self._buffer_size,
                         *attr.shape[1:]), dtype=typ, device=self.device))
             elif hasattr(self, attr_str):  # if tensor already exists, update it and possibly resize it according to the buffer_size

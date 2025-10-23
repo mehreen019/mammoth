@@ -259,32 +259,34 @@ class SequentialHindiBanglaNER(ContinualDataset):
             print("Using dummy data for demonstration...")
             bangla_train, bangla_test = self._create_dummy_data('bangla', 500, 100)
 
-        # Extract tokens and labels - handle both real data and dummy data
-        # Hindi
-        if isinstance(hindi_train, tuple):
-            hindi_train_texts, hindi_train_labels = hindi_train
-            hindi_test_texts, hindi_test_labels = hindi_test
-        else:
-            hindi_train_texts = hindi_train['tokens']
-            hindi_train_labels = hindi_train['ner_tags']
-            hindi_test_texts = hindi_test['tokens']
-            hindi_test_labels = hindi_test['ner_tags']
+        def _extract_texts_and_labels(split, split_name: str):
+            """Normalize HuggingFace or tuple-based split outputs into (texts, labels) lists."""
+            # Tuple of (texts, labels) -> typically dummy data fallback
+            if isinstance(split, tuple) and len(split) == 2:
+                texts, labels = split
+            # HuggingFace Dataset object
+            elif hasattr(split, '__getitem__') and hasattr(split, 'column_names'):
+                texts, labels = split['tokens'], split['ner_tags']
+            # Dictionary-style access (e.g., DatasetDict split converted to dict)
+            elif isinstance(split, dict) and 'tokens' in split and 'ner_tags' in split:
+                texts, labels = split['tokens'], split['ner_tags']
+            else:
+                raise TypeError(f"Unsupported split type for {split_name}: {type(split)}")
 
-        # Bangla
-        if isinstance(bangla_train, tuple):
-            bangla_train_texts, bangla_train_labels = bangla_train
-            bangla_test_texts, bangla_test_labels = bangla_test
-        else:
-            bangla_train_texts = bangla_train['tokens']
-            bangla_train_labels = bangla_train['ner_tags']
-            bangla_test_texts = bangla_test['tokens']
-            bangla_test_labels = bangla_test['ner_tags']
+            # Ensure we always work with regular Python lists for downstream processing
+            return list(texts), list(labels)
+
+        # Extract tokens and labels - handle both real data and dummy data uniformly
+        hindi_train_texts, hindi_train_labels = _extract_texts_and_labels(hindi_train, "hindi_train")
+        hindi_test_texts, hindi_test_labels = _extract_texts_and_labels(hindi_test, "hindi_test")
+        bangla_train_texts, bangla_train_labels = _extract_texts_and_labels(bangla_train, "bangla_train")
+        bangla_test_texts, bangla_test_labels = _extract_texts_and_labels(bangla_test, "bangla_test")
 
         # Combine datasets with task IDs (Hindi=0, Bangla=1)
-        all_train_texts = list(hindi_train_texts) + list(bangla_train_texts)
-        all_train_labels = list(hindi_train_labels) + list(bangla_train_labels)
-        all_test_texts = list(hindi_test_texts) + list(bangla_test_texts)
-        all_test_labels = list(hindi_test_labels) + list(bangla_test_labels)
+        all_train_texts = hindi_train_texts + bangla_train_texts
+        all_train_labels = hindi_train_labels + bangla_train_labels
+        all_test_texts = hindi_test_texts + bangla_test_texts
+        all_test_labels = hindi_test_labels + bangla_test_labels
 
         # Create task IDs: 0 for Hindi, 1 for Bangla
         train_task_ids = [0] * len(hindi_train_texts) + [1] * len(bangla_train_texts)
