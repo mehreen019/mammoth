@@ -16,7 +16,7 @@ import time
 import json
 from pathlib import Path
 
-def run_experiment(model, buffer_size=None, n_epochs=2, batch_size=16, lr=2e-5):
+def run_experiment(model, buffer_size=None, n_epochs=5, batch_size=16, lr=2e-5):
     """Run a single experiment"""
     print("\n" + "="*80)
     print(f"RUNNING EXPERIMENT: {model.upper()}")
@@ -82,7 +82,7 @@ def main():
     print("="*80)
     
     # Configuration
-    n_epochs = 2  # Epochs per task
+    n_epochs = 5  # Epochs per task (increased for better convergence)
     batch_size = 16
     lr = 2e-5
     buffer_size = 200

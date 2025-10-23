@@ -394,7 +394,7 @@ class SequentialHindiBanglaNER(ContinualDataset):
     """
 
     NAME = 'seq-hindi-bangla-ner'
-    SETTING = 'task-il'  # Task-IL: same classes, different tasks (languages)
+    SETTING = 'class-il'  # Class-IL: same classes across different language domains
     N_CLASSES_PER_TASK = 4  # O, PER, LOC, ORG (same for both languages)
     N_TASKS = 2  # Hindi, Bangla
     N_CLASSES = 4  # Total unique classes (shared across tasks)
@@ -439,13 +439,13 @@ class SequentialHindiBanglaNER(ContinualDataset):
 
         print("Loading WikiANN dataset for Hindi and Bangla...")
 
-        # Load Hindi data (Task 0)
-        hindi_train = _load_wikiann_split('hi', 'train[:500]')  # Smaller for speed
-        hindi_test = _load_wikiann_split('hi', 'validation[:100]')
+        # Load Hindi data (Task 0) - using full dataset for better performance
+        hindi_train = _load_wikiann_split('hi', 'train')
+        hindi_test = _load_wikiann_split('hi', 'validation')
 
-        # Load Bangla data (Task 1)
-        bangla_train = _load_wikiann_split('bn', 'train[:500]')
-        bangla_test = _load_wikiann_split('bn', 'validation[:100]')
+        # Load Bangla data (Task 1) - using full dataset for better performance
+        bangla_train = _load_wikiann_split('bn', 'train')
+        bangla_test = _load_wikiann_split('bn', 'validation')
 
         def _extract_texts_and_labels(split, split_name: str):
             """Normalize HuggingFace or tuple-based split outputs into (texts, labels) lists."""
@@ -531,7 +531,7 @@ class SequentialHindiBanglaNER(ContinualDataset):
 
     @set_default_from_args('n_epochs')
     def get_epochs(self):
-        return 2  # Fast training for demo (2 epochs per task)
+        return 5  # Increased for better convergence (5 epochs per task)
 
     def get_class_names(self):
         if self.class_names is not None:

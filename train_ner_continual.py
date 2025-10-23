@@ -50,7 +50,7 @@ if __name__ == '__main__':
         '--n_classes': '4',  # Hindi-Bangla NER has 4 classes: O, PER, LOC, ORG
         '--model': model,
         '--batch_size': '16',
-        '--n_epochs': '2',
+        '--n_epochs': '5',  # Increased from 2 to 5 for better convergence
         '--lr': '2e-5',
         '--enable_other_metrics': '1',
         '--seed': '42',
