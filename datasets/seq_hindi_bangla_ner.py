@@ -26,29 +26,73 @@ from datasets.utils.continual_dataset import ContinualDataset, store_masked_load
 from utils.conf import base_path
 from datasets.utils import set_default_from_args
 
-# Handle the HuggingFace import using __import__ to avoid naming conflict
+# Handle the HuggingFace import - must manipulate sys.path to avoid local datasets folder
 load_dataset = None
 AutoTokenizer = None
 HUGGINGFACE_AVAILABLE = False
 
 def _import_hf_datasets():
-    """Import HuggingFace datasets using __import__ to bypass naming conflict"""
+    """Import HuggingFace datasets by temporarily removing mammoth dir from sys.path"""
+    import sys
+    import os
+
+    # Save original state
+    original_path = sys.path.copy()
+    original_modules = {}
+
     try:
-        # Use __import__ with fromlist to get the actual module
-        hf_datasets = __import__('datasets', fromlist=['load_dataset'], level=0)
-        # Check if this is actually the HuggingFace package (has load_dataset)
+        # Remove '/content/mammoth' and similar from sys.path
+        mammoth_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        # Filter out the mammoth directory from sys.path
+        new_path = []
+        for p in sys.path:
+            abs_p = os.path.abspath(p) if p else ''
+            if abs_p != mammoth_dir and p not in ['', '.']:
+                new_path.append(p)
+
+        # Backup and remove 'datasets' from sys.modules if it points to local folder
+        if 'datasets' in sys.modules:
+            original_modules['datasets'] = sys.modules['datasets']
+            if hasattr(sys.modules['datasets'], '__file__'):
+                if 'mammoth' in sys.modules['datasets'].__file__:
+                    del sys.modules['datasets']
+
+        # Also remove any datasets.* submodules
+        for key in list(sys.modules.keys()):
+            if key.startswith('datasets.'):
+                original_modules[key] = sys.modules[key]
+                del sys.modules[key]
+
+        # Apply new path
+        sys.path = new_path
+
+        # Now import HuggingFace datasets
+        import datasets as hf_datasets
+        import transformers
+
+        # Verify we got the right module
         if not hasattr(hf_datasets, 'load_dataset'):
-            return None, None
-        transformers = __import__('transformers', fromlist=['AutoTokenizer'], level=0)
-        return hf_datasets.load_dataset, transformers.AutoTokenizer
-    except:
-        return None, None
+            raise ImportError("Got wrong datasets module")
+
+        # Extract what we need
+        load_func = hf_datasets.load_dataset
+        tokenizer_class = transformers.AutoTokenizer
+
+        return load_func, tokenizer_class
+
+    finally:
+        # Always restore original state
+        sys.path = original_path
+        for key, value in original_modules.items():
+            sys.modules[key] = value
 
 try:
     load_dataset, AutoTokenizer = _import_hf_datasets()
     if load_dataset is not None and AutoTokenizer is not None:
         HUGGINGFACE_AVAILABLE = True
-except:
+except Exception as e:
+    # Failed to import, will try again at runtime
     pass
 
 
