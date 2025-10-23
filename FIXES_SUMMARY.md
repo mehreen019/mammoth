@@ -1,5 +1,9 @@
 # Summary of Fixes for Hindi-Bangla NER Continual Learning
 
+## Latest Update (2025-10-23)
+
+**Fixed ArgumentError**: Resolved conflict with `--device` and other arguments by changing how `train_ner_continual.py` passes arguments to Mammoth's main function. The script now properly merges user arguments with defaults without creating conflicts.
+
 ## Problems Identified
 
 ### 1. **Low Accuracy (10-20%)**
