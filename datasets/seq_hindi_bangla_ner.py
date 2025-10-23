@@ -19,6 +19,7 @@ import numpy as np
 from torch.utils.data import Dataset
 import sys
 import os
+import itertools
 
 # Avoid multiprocessing issues with HuggingFace datasets in restricted environments
 os.environ.setdefault("HF_DATASETS_DISABLE_MULTIPROCESSING", "1")
@@ -102,6 +103,26 @@ except Exception as e:
     pass
 
 
+def _streaming_subset(lang_code: str, base_split: str, limit: int):
+    """Fallback loader that streams WikiANN samples without multiprocessing."""
+    if load_dataset is None:
+        raise ImportError("HuggingFace `load_dataset` is not available")
+
+    stream = load_dataset('wikiann', lang_code, split=base_split, streaming=True)
+    tokens, ner_tags = [], []
+    for example in itertools.islice(stream, limit):
+        tokens.append(example['tokens'])
+        ner_tags.append(example['ner_tags'])
+
+    if not tokens:
+        raise RuntimeError(f"Failed to stream WikiANN ({lang_code}, {base_split}) subset.")
+
+    return {
+        'tokens': tokens,
+        'ner_tags': ner_tags
+    }
+
+
 def _load_wikiann_split(lang_code: str, split: str):
     """
     Load a WikiANN split with fallbacks for multiprocessing lock issues observed
@@ -111,7 +132,7 @@ def _load_wikiann_split(lang_code: str, split: str):
         raise ImportError("HuggingFace `load_dataset` is not available")
 
     try:
-        return load_dataset('wikiann', lang_code, split=split)
+        return load_dataset('wikiann', lang_code, split=split, keep_in_memory=True, num_proc=1)
     except Exception as err:
         err_msg = str(err)
         if "RLock objects should only be shared between processes through inheritance" not in err_msg:
@@ -135,7 +156,25 @@ def _load_wikiann_split(lang_code: str, split: str):
             except Exception:
                 pass
 
-        return load_dataset('wikiann', lang_code, split=split, **extra_kwargs)
+        try:
+            return load_dataset('wikiann', lang_code, split=split, num_proc=1, **extra_kwargs)
+        except Exception as second_err:
+            second_msg = str(second_err)
+            if "RLock objects should only be shared between processes through inheritance" not in second_msg:
+                raise
+
+            print(f"Switching to streaming fallback for WikiANN ({lang_code}, {split})...")
+            base_split = split
+            limit = 500
+            if '[' in split and ']' in split and ':' in split:
+                base_split, subset = split.split('[', 1)
+                subset = subset.strip(']')
+                if subset.startswith(':'):
+                    try:
+                        limit = int(subset[1:])
+                    except ValueError:
+                        limit = 500
+            return _streaming_subset(lang_code, base_split, limit)
 
 
 class NERDatasetWrapper(Dataset):
