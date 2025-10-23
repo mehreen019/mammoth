@@ -141,10 +141,12 @@ class SequentialHindiBanglaNER(ContinualDataset):
         super().__init__(args)
 
         if not HUGGINGFACE_AVAILABLE:
-            raise ImportError(
-                "This dataset requires HuggingFace libraries. "
-                "Install with: pip install datasets transformers"
-            )
+            import importlib
+            datasets = importlib.import_module("datasets")
+            transformers = importlib.import_module("transformers")
+            from datasets import load_dataset
+            from transformers import AutoTokenizer
+            print("✅ Dynamically loaded HuggingFace libraries at runtime")
 
         # Use multilingual BERT tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained('bert-base-multilingual-cased')
