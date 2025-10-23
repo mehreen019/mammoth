@@ -20,6 +20,10 @@ from torch.utils.data import Dataset
 import sys
 import os
 
+# Avoid multiprocessing issues with HuggingFace datasets in restricted environments
+os.environ.setdefault("HF_DATASETS_DISABLE_MULTIPROCESSING", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 # IMPORTANT: Must import local datasets utilities BEFORE trying to import HuggingFace datasets
 # to avoid import conflicts
 from datasets.utils.continual_dataset import ContinualDataset, store_masked_loaders
