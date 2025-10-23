@@ -163,6 +163,28 @@ def _load_wikiann_split(lang_code: str, split: str):
             if "RLock objects should only be shared between processes through inheritance" not in second_msg:
                 raise
 
+            # Builder fallback - force single process download/prepare
+            if HF_DATASETS_LIB is not None:
+                print(f"Attempting builder fallback for WikiANN ({lang_code}, {split})...")
+                try:
+                    builder = HF_DATASETS_LIB.load_dataset_builder('wikiann', lang_code)
+                    prepare_kwargs = {'num_proc': 1}
+                    if HF_DOWNLOAD_CONFIG_CLS is not None:
+                        try:
+                            prepare_kwargs['download_config'] = HF_DOWNLOAD_CONFIG_CLS(num_proc=1, max_workers=1)
+                        except TypeError:
+                            try:
+                                prepare_kwargs['download_config'] = HF_DOWNLOAD_CONFIG_CLS(max_workers=1)
+                            except Exception:
+                                pass
+                    builder.download_and_prepare(**prepare_kwargs)
+                    return builder.as_dataset(split=split)
+                except Exception as builder_err:
+                    builder_msg = str(builder_err)
+                    if "RLock objects should only be shared between processes through inheritance" not in builder_msg:
+                        raise
+                    print(f"Builder fallback also failed with multiprocessing lock for WikiANN ({lang_code}, {split}).")
+
             print(f"Switching to streaming fallback for WikiANN ({lang_code}, {split})...")
             base_split = split
             limit = 500
@@ -331,18 +353,32 @@ class SequentialHindiBanglaNER(ContinualDataset):
             hindi_train = _load_wikiann_split('hi', 'train[:500]')  # Smaller for speed
             hindi_test = _load_wikiann_split('hi', 'validation[:100]')
         except Exception as e:
-            print(f"Error loading Hindi WikiANN: {e}")
-            print("Using dummy data for demonstration...")
-            hindi_train, hindi_test = self._create_dummy_data('hindi', 500, 100)
+            help_msg = (
+                "\n"
+                "Failed to load the Hindi WikiANN split.\n"
+                "Colab runtimes often pin dill==0.3.7 which is incompatible with multiprocess 0.70.16 "
+                "on Python 3.12. Run the following in a fresh Colab cell, restart the runtime, and try again:\n"
+                "  !pip install -U pip\n"
+                "  !pip install -U \"dill>=0.3.8\" \"multiprocess>=0.70.16\" \"datasets>=2.18\"\n"
+                "If you are running locally, make sure the same versions are active in your environment."
+            )
+            raise RuntimeError(help_msg) from e
 
         # Load Bangla data (Task 1)
         try:
             bangla_train = _load_wikiann_split('bn', 'train[:500]')
             bangla_test = _load_wikiann_split('bn', 'validation[:100]')
         except Exception as e:
-            print(f"Error loading Bangla WikiANN: {e}")
-            print("Using dummy data for demonstration...")
-            bangla_train, bangla_test = self._create_dummy_data('bangla', 500, 100)
+            help_msg = (
+                "\n"
+                "Failed to load the Bangla WikiANN split.\n"
+                "Colab runtimes often pin dill==0.3.7 which is incompatible with multiprocess 0.70.16 "
+                "on Python 3.12. Run the following in a fresh Colab cell, restart the runtime, and try again:\n"
+                "  !pip install -U pip\n"
+                "  !pip install -U \"dill>=0.3.8\" \"multiprocess>=0.70.16\" \"datasets>=2.18\"\n"
+                "If you are running locally, make sure the same versions are active in your environment."
+            )
+            raise RuntimeError(help_msg) from e
 
         def _extract_texts_and_labels(split, split_name: str):
             """Normalize HuggingFace or tuple-based split outputs into (texts, labels) lists."""
@@ -361,7 +397,7 @@ class SequentialHindiBanglaNER(ContinualDataset):
             # Ensure we always work with regular Python lists for downstream processing
             return list(texts), list(labels)
 
-        # Extract tokens and labels - handle both real data and dummy data uniformly
+        # Extract tokens and labels - handle both real data and streaming dictionaries uniformly
         hindi_train_texts, hindi_train_labels = _extract_texts_and_labels(hindi_train, "hindi_train")
         hindi_test_texts, hindi_test_labels = _extract_texts_and_labels(hindi_test, "hindi_test")
         bangla_train_texts, bangla_train_labels = _extract_texts_and_labels(bangla_train, "bangla_train")
@@ -401,29 +437,6 @@ class SequentialHindiBanglaNER(ContinualDataset):
         train_loader, test_loader = store_masked_loaders(train_dataset, test_dataset, self)
 
         return train_loader, test_loader
-
-    def _create_dummy_data(self, lang, n_train, n_test):
-        """Create dummy NER data for testing when WikiANN is unavailable"""
-        import random
-
-        vocab = {
-            'hindi': ['राम', 'दिल्ली', 'भारत', 'गूगल', 'सीता', 'मुंबई'],
-            'bangla': ['রাম', 'ঢাকা', 'বাংলাদেশ', 'গুগল', 'সীতা', 'কলকাতা']
-        }
-
-        def generate_sample():
-            tokens = random.choices(vocab[lang], k=random.randint(5, 15))
-            # Random NER tags (0=O, 1-2=PER, 3-4=LOC, 5-6=ORG)
-            labels = [random.randint(0, 6) for _ in tokens]
-            return tokens, labels
-
-        train_data = [generate_sample() for _ in range(n_train)]
-        test_data = [generate_sample() for _ in range(n_test)]
-
-        train_texts, train_labels = zip(*train_data)
-        test_texts, test_labels = zip(*test_data)
-
-        return (train_texts, train_labels), (test_texts, test_labels)
 
     @set_default_from_args("backbone")
     def get_backbone(self):
