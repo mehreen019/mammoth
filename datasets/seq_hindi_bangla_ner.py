@@ -158,20 +158,28 @@ class NERDatasetWrapper(Dataset):
         self.targets = np.array(self.sentence_labels)
         self.attention_masks = np.array([enc['attention_mask'].numpy() for enc in self.encodings])
 
-        # Store task IDs for continual learning
+        # Store task IDs for continual learning - must match the data length!
         if task_ids is not None:
-            self.task_ids = np.array(task_ids)
+            self.task_ids = np.array(task_ids[:len(self.data)])  # Trim to actual data length
         else:
-            self.task_ids = np.zeros(len(self.texts), dtype=np.int64)
+            self.task_ids = np.zeros(len(self.data), dtype=np.int64)
+
+        # Ensure all arrays have the same length
+        assert len(self.data) == len(self.targets) == len(self.attention_masks) == len(self.task_ids), \
+            f"Mismatched lengths: data={len(self.data)}, targets={len(self.targets)}, masks={len(self.attention_masks)}, task_ids={len(self.task_ids)}"
 
     def __len__(self):
-        return len(self.texts)
+        # Use the actual data length, not texts length (in case some failed to tokenize)
+        return len(self.data)
 
     def __getitem__(self, index):
         """
         Returns: (input_ids, label, attention_mask)
         Matches Mammoth's (data, target, not_aug_data) pattern
         """
+        if index >= len(self.data):
+            raise IndexError(f"Index {index} out of bounds for dataset with {len(self.data)} samples")
+
         input_ids = torch.tensor(self.data[index], dtype=torch.long)
         label = torch.tensor(self.targets[index], dtype=torch.long)
         attention_mask = torch.tensor(self.attention_masks[index], dtype=torch.long)
